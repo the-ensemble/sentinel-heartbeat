@@ -533,9 +533,16 @@ function renderBgpTable(current) {
 
 function renderFlights(current) {
   const results = current?.flights?.results;
-  if (!results) return '<div class="flight-grid"><div class="flight-card"><div class="flight-zone-name">Flight Data</div><div class="flight-count" style="font-size:14px;color:var(--text-dim)">Rate-limited — next update soon</div></div></div>';
+  if (!results) return '<div class="flight-grid"><div class="flight-card"><div class="flight-zone-name">Flight Data</div><div class="flight-count" style="font-size:14px;color:var(--text-dim)">No flight data available</div></div></div>';
 
-  let html = '<div class="flight-grid">';
+  const asOf = current?.flights_as_of;
+  let ageNote = '';
+  if (asOf) {
+    const mins = Math.round((new Date() - new Date(asOf)) / 60000);
+    ageNote = `<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;text-align:center">Last sampled ${mins} min ago (OpenSky updates every 20 min)</div>`;
+  }
+
+  let html = ageNote + '<div class="flight-grid">';
   for (const r of results) {
     const label = FLIGHT_ZONE_LABELS[r.zone] || r.zone;
     const count = r.aircraft_count != null ? r.aircraft_count : '—';

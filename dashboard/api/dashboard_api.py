@@ -94,6 +94,14 @@ def handler(event, context):
     # Latest entry is the current state (full detail)
     current = entries[-1] if entries else None
 
+    # Carry forward most recent flight data if current entry lacks it
+    if current and "flights" not in current:
+        for e in reversed(entries[:-1]):
+            if "flights" in e:
+                current["flights"] = e["flights"]
+                current["flights_as_of"] = e["timestamp"]
+                break
+
     # Timeline: slim summaries, keep last 288 (24h at 5-min intervals)
     timeline = [slim_entry(e) for e in entries[-288:]]
 
