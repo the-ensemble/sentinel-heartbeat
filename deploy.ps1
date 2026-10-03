@@ -52,6 +52,12 @@ function Deploy-Api {
 function Deploy-Dashboard {
     Write-Host "==> index.html -> s3://$SiteBucket"
     aws s3 cp "$Root\dashboard\index.html" "s3://$SiteBucket/index.html" --content-type "text/html; charset=utf-8" --cache-control "max-age=60"
+    Write-Host "==> 404.html, robots.txt, favicons -> s3://$SiteBucket"
+    aws s3 cp "$Root\dashboardĄ.html" "s3://$SiteBucket/404.html" --content-type "text/html; charset=utf-8" --cache-control "max-age=300"
+    aws s3 cp "$Root\dashboardobots.txt" "s3://$SiteBucket/robots.txt" --content-type "text/plain; charset=utf-8" --cache-control "max-age=3600"
+    aws s3 cp "$Root\dashboardavicon.svg" "s3://$SiteBucket/favicon.svg" --content-type "image/svg+xml" --cache-control "max-age=86400"
+    aws s3 cp "$Root\dashboardavicon.ico" "s3://$SiteBucket/favicon.ico" --content-type "image/x-icon" --cache-control "max-age=86400"
+    aws s3 cp "$Root\dashboardpple-touch-icon.png" "s3://$SiteBucket/apple-touch-icon.png" --content-type "image/png" --cache-control "max-age=86400"
     $inv = aws cloudfront create-invalidation --distribution-id $Distribution --paths "/*" --query "Invalidation.Id" --output text
     Write-Host "    invalidation $inv"
 }
