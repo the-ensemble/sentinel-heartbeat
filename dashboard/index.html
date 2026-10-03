@@ -358,9 +358,12 @@ const REGIONS = {
   'UAE':       { label: 'United Arab Emirates', tag: 'me-central-1', aws: 'me-central-1', probeCC: 'AE', bgpCountry: 'AE' },
   'Israel':    { label: 'Israel', tag: 'il-central-1', aws: 'il-central-1', probeCC: 'IL', bgpCountry: 'IL' },
   'Hong Kong': { label: 'Hong Kong', tag: 'ap-east-1', aws: 'ap-east-1', probeCC: 'HK', bgpCountry: 'HK' },
-  'Bahrain':   { label: 'Bahrain', tag: 'me-south-1 — TCP canary', canary: 'me-south-1', probeCC: 'BH', bgpCountry: 'BH' },
-  'Taiwan':    { label: 'Taiwan', tag: 'BGP + probes only', probeCC: 'TW', bgpCountry: 'TW' },
+  'Bahrain':   { label: 'Bahrain', tag: 'me-south-1 — AWS: not restorable, update early 2027', canary: 'me-south-1', probeCC: 'BH', bgpCountry: 'BH' },
+  'Taiwan':    { label: 'Taiwan', tag: 'ap-east-2', aws: 'ap-east-2', probeCC: 'TW', bgpCountry: 'TW' },
 };
+
+const IODA_LEVEL_STATUS = { critical: 'down', warning: 'warn' };
+const IODA_SERIES_LABELS = { bgp: 'BGP /24s', ping: 'Ping /24s', telescope: 'Telescope', gtr_norm: 'Google traffic' };
 
 const FLIGHT_ZONE_LABELS = {
   israel: 'Israel Airspace',
@@ -438,6 +441,25 @@ function getProbe(data, cc) {
 function getBgp(data, cc) {
   return (data?.bgp?.results || []).filter(b => b.country === cc);
 }
+function getIoda(data, cc) {
+  return (data?.ioda?.results || []).find(i => i.country === cc) || null;
+}
+function getCountryRouting(data, cc) {
+  return (data?.country_routing?.results || []).find(c => c.country === cc) || null;
+}
+
+// IODA's own alert feed drives status: critical -> down, warning -> warn, quiet -> ok.
+function iodaStatus(entry) {
+  if (!entry) return null;
+  if (entry.status !== 'ok') return 'err';
+  return IODA_LEVEL_STATUS[entry.alerts?.worst] || 'ok';
+}
+function iodaText(entry) {
+  if (!entry || entry.status !== 'ok') return 'NO DATA';
+  const active = Object.entries(entry.alerts?.active || {});
+  if (!active.length) return 'no alerts';
+  return active.map(([ds, lvl]) => `${lvl.toUpperCase()}: ${ds}`).join(', ');
+}
 
 function signalRow(label, value, status) {
   return `<div class="signal-row"><span class="signal-label">${esc(label)}</span><span class="signal-value ${status}">${esc(value)}</span></div>`;
@@ -457,7 +479,9 @@ function renderRegionCards(current, baselines) {
     const canaryStatus = cfg.canary ? (canary ? (canary.reachable ? 'ok' : 'down') : 'err') : null;
     const probeStatus = probe ? (probe.status === 'ok' ? (probe.connected > 0 ? 'ok' : 'down') : 'err') : null;
     const bgpSt = bgpGroupStatus(bgpEntries, baselines);
-    const overall = worstStatus(awsStatus, canaryStatus, probeStatus, bgpSt);
+    const ioda = getIoda(current, cfg.probeCC);
+    const iodaSt = iodaStatus(ioda);
+    const overall = worstStatus(awsStatus, canaryStatus, probeStatus, bgpSt, iodaSt);
 
     html += `<div class="region-card ${overall}">`;
     html += `<div class="region-name">${esc(name)}`;
@@ -485,6 +509,9 @@ function renderRegionCards(current, baselines) {
       const v = ok.length ? `${(minVis * 100).toFixed(1)}% vis · ${ok.length}/${bgpEntries.length} ASNs` : 'NO DATA';
       html += signalRow('BGP Routing', v, bgpSt);
     }
+    if (ioda) {
+      html += signalRow('IODA', iodaText(ioda), iodaSt);
+    }
 
     html += '</div>';
   }
@@ -510,6 +537,10 @@ const TIMELINE_ROWS = [
   { label: 'Bahrain Canary', key: e => {
       const c = e.canaries?.['me-south-1'];
       return c === undefined ? 'none' : c ? 'ok' : 'down'; } },
+  { label: 'IODA Alerts', key: e => {
+      const i = e.ioda; if (!i || !i.total) return 'none';
+      if (!i.ok) return 'err';
+      return IODA_LEVEL_STATUS[e.ioda_worst] || 'ok'; } },
 ];
 
 function renderTimeline(timeline) {
@@ -575,6 +606,62 @@ function renderBgpTable(current, baselines) {
   }
   html += '</tbody></table></div>';
   return html;
+}
+
+// ----------------------------------------------------------- country table
+
+function fmtNum(v) {
+  if (v == null) return '—';
+  return Number.isInteger(v) ? v.toLocaleString('en-US') : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+function deltaSpan(cur, prev) {
+  if (cur == null || prev == null) return '';
+  const d = cur - prev;
+  const ratio = prev ? cur / prev : 1;
+  const st = ratio < PREFIX_DOWN_RATIO ? 'down' : ratio < PREFIX_WARN_RATIO ? 'warn' : '';
+  return `<span class="delta ${st}">${d === 0 ? '±0' : (d > 0 ? '+' : '') + fmtNum(d)}</span>`;
+}
+
+function renderCountryTable(current) {
+  const iodaRows = current?.ioda?.results || [];
+  const risRows = current?.country_routing?.results || [];
+  if (!iodaRows.length && !risRows.length) return '';
+
+  const countries = Object.values(REGIONS).map(r => r.probeCC);
+  let html = '<div class="table-wrap"><table><thead><tr><th>Country</th>';
+  for (const k of Object.keys(IODA_SERIES_LABELS)) html += `<th>${IODA_SERIES_LABELS[k]}</th>`;
+  html += '<th>IODA alerts 24h</th><th>RIS ASNs (vs prev day)</th><th>RIS IPv4 prefixes</th><th>RIS IPv6 prefixes</th></tr></thead><tbody>';
+
+  for (const cc of countries) {
+    const io = iodaRows.find(r => r.country === cc);
+    const ris = risRows.find(r => r.country === cc);
+    html += `<tr><td>${esc(cc)}</td>`;
+    for (const k of Object.keys(IODA_SERIES_LABELS)) {
+      const s = io?.status === 'ok' ? io.signals?.[k] : null;
+      html += `<td>${s ? fmtNum(s.value) : `<span class="signal-value ${io ? 'err' : 'na'}">—</span>`}</td>`;
+    }
+    const st = iodaStatus(io);
+    html += `<td><span class="signal-value ${st || 'na'}">${esc(iodaText(io))}</span></td>`;
+    if (ris?.status === 'ok') {
+      html += `<td>${fmtNum(ris.asns)}${deltaSpan(ris.asns, ris.prev?.asns)}</td>`;
+      html += `<td>${fmtNum(ris.v4_prefixes)}${deltaSpan(ris.v4_prefixes, ris.prev?.v4_prefixes)}</td>`;
+      html += `<td>${fmtNum(ris.v6_prefixes)}${deltaSpan(ris.v6_prefixes, ris.prev?.v6_prefixes)}</td>`;
+    } else {
+      // Absent = not sampled yet this hour (grey); present but failed = collector error (purple).
+      html += `<td><span class="signal-value ${ris ? 'err' : 'na'}">—</span></td>`.repeat(3);
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  const notes = [];
+  const io0 = iodaRows.find(r => r.status === 'ok' && r.signals?.bgp);
+  if (io0) notes.push(`IODA signals as of ${fmtUTC(io0.signals.bgp.as_of)}`);
+  const ris0 = risRows.find(r => r.status === 'ok');
+  if (ris0?.stats_date) notes.push(`RIS daily stats for ${esc(ris0.stats_date)}`);
+  if (current?.country_routing_as_of) notes.push(`sampled ${fmtUTC(current.country_routing_as_of)}`);
+  return (notes.length ? `<div class="section-sub" style="margin-top:8px">${notes.join(' · ')}</div>` : '') + html;
 }
 
 // ----------------------------------------------------------------- flights
@@ -651,6 +738,13 @@ function render(data) {
   html += '<div class="section-title">24-Hour Timeline</div>';
   html += renderTimeline(timeline);
 
+  const countryTable = renderCountryTable(current);
+  if (countryTable) {
+    html += '<div class="section-title">Country-Level Internet</div>';
+    html += '<div class="section-sub">IODA (Georgia Tech) country signals and outage alerts; RIPE RIS routing totals per country. Alert status comes from IODA\'s own detectors.</div>';
+    html += countryTable;
+  }
+
   html += '<div class="section-title">BGP Routing Detail</div>';
   html += `<div class="section-sub">Degraded below ${BGP_WARN_BELOW * 100}% peer visibility or a ${Math.round((1 - PREFIX_WARN_RATIO) * 100)}% prefix withdrawal vs the 24h median; Down below ${BGP_DOWN_BELOW * 100}% / ${Math.round((1 - PREFIX_DOWN_RATIO) * 100)}%.</div>`;
   html += renderBgpTable(current, baselines);
@@ -661,7 +755,8 @@ function render(data) {
 
   html += `<footer>
     Sources: AWS Lambda heartbeats · <a href="https://stat.ripe.net">RIPEstat</a> ·
-    <a href="https://atlas.ripe.net">RIPE Atlas</a> · <a href="https://adsb.lol">adsb.lol</a><br>
+    <a href="https://atlas.ripe.net">RIPE Atlas</a> · <a href="https://ioda.inetintel.cc.gatech.edu">IODA</a> ·
+    <a href="https://adsb.lol">adsb.lol</a><br>
     Sampled every 5 minutes · page refreshes every 60 seconds · ${data.entries_count || 0} samples in window
     ${current.collect_seconds != null ? `· last collection ${current.collect_seconds}s` : ''}
   </footer>`;

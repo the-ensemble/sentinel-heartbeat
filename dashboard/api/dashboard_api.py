@@ -53,26 +53,43 @@ def slim_entry(entry):
 
     canaries = entry.get("canaries") or {}
     out["canaries"] = {r.get("region"): bool(r.get("reachable")) for r in canaries.get("results", [])}
+
+    ioda = entry.get("ioda")
+    if ioda:
+        out["ioda"] = ioda.get("summary", {})
+        levels = [(r.get("alerts") or {}).get("worst") for r in ioda.get("results", []) if r.get("status") == "ok"]
+        out["ioda_worst"] = max((l for l in levels if l), key=lambda l: IODA_LEVEL_RANK.get(l, 0), default=None)
     return out
 
 
-def flights_succeeded(entry):
-    return bool(((entry.get("flights") or {}).get("summary") or {}).get("ok"))
+IODA_LEVEL_RANK = {"warning": 1, "critical": 2}
+
+# Sections the API carries forward from the last successful sample when the
+# latest entry lacks them or they failed.
+CARRY_FORWARD_SECTIONS = ("flights", "country_routing")
 
 
-def carry_forward_flights(entries):
-    """Return the latest entry; if its flight sample failed, borrow the last good one."""
+def section_succeeded(entry, section):
+    return bool(((entry.get(section) or {}).get("summary") or {}).get("ok"))
+
+
+def carry_forward(entries, section):
+    """Patch the latest entry's section from the most recent entry where it succeeded."""
     if not entries:
         return None
     current = entries[-1]
-    if flights_succeeded(current):
+    if section_succeeded(current, section):
         return current
     for e in reversed(entries[:-1]):
-        if flights_succeeded(e):
-            current["flights"] = e["flights"]
-            current["flights_as_of"] = e["timestamp"]
+        if section_succeeded(e, section):
+            current[section] = e[section]
+            current[f"{section}_as_of"] = e["timestamp"]
             break
     return current
+
+
+def carry_forward_flights(entries):
+    return carry_forward(entries, "flights")
 
 
 def bgp_baseline(entries):
@@ -132,7 +149,9 @@ def handler(event, context):
     entries.sort(key=lambda e: e.get("timestamp", ""))
     entries = entries[-MAX_TIMELINE:]
 
-    current = carry_forward_flights(entries)
+    current = entries[-1] if entries else None
+    for section in CARRY_FORWARD_SECTIONS:
+        current = carry_forward(entries, section)
     data_age_s = None
     if current and current.get("timestamp"):
         data_age_s = int((now - parse_ts(current["timestamp"])).total_seconds())

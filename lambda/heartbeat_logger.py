@@ -25,6 +25,7 @@ ENDPOINTS = {
     "me-central-1": "https://m6rjrc7hrc.execute-api.me-central-1.amazonaws.com/",
     "il-central-1": "https://c3icm0os4i.execute-api.il-central-1.amazonaws.com/",
     "ap-east-1": "https://jhxmflrny5.execute-api.ap-east-1.amazonaws.com/",
+    "ap-east-2": "https://8hhwdbtp3e.execute-api.ap-east-2.amazonaws.com/",
 }
 
 # --- BGP ASNs to monitor per country (major ISPs) ---
@@ -57,6 +58,21 @@ PREFIX = "heartbeat-logs/"
 RIPESTAT_BASE = "https://stat.ripe.net/data/routing-status/data.json"
 ATLAS_BASE = "https://atlas.ripe.net/api/v2/probes/"
 ADSB_BASE = "https://api.adsb.lol/v2/point"
+IODA_BASE = "https://api.ioda.inetintel.cc.gatech.edu/v2"
+COUNTRY_RIS_BASE = "https://stat.ripe.net/data/country-resource-stats/data.json"
+
+# IODA raw datasources we keep -> short key in the log. Others (loss/latency
+# breakdowns) are nested objects and are skipped.
+IODA_SERIES = {
+    "bgp": "bgp",              # /24 blocks visible in BGP
+    "ping-slash24": "ping",    # /24 blocks responding to active probing
+    "merit-nt": "telescope",   # darknet telescope traffic (unique source IPs)
+    "gtr-norm": "gtr_norm",    # Google Transparency Report traffic, normalised
+}
+IODA_LEVEL_RANK = {"normal": 0, "warning": 1, "critical": 2}
+IODA_SIGNAL_WINDOW_S = 2 * 3600
+IODA_ALERT_WINDOW_S = 24 * 3600
+COUNTRY_RIS_DAYS = 8
 
 # Per-source timeouts (seconds). RIPEstat routinely takes 12-18 s.
 TIMEOUT_HEARTBEAT = 10
@@ -64,6 +80,8 @@ TIMEOUT_RIPESTAT = 25
 TIMEOUT_ATLAS = 10
 TIMEOUT_ADSB = 10
 TIMEOUT_CANARY = 5
+TIMEOUT_IODA = 15
+TIMEOUT_COUNTRY_RIS = 20
 
 # adsb.lol rejects back-to-back requests with HTTP 429; space them out.
 ADSB_SPACING_S = 1.5
@@ -75,7 +93,7 @@ GPS_DEGRADED_NIC = 6
 
 USER_AGENT = "scout-sentinel/2.0 (+https://sonde.briansheppard.com)"
 
-SECTIONS = ("heartbeats", "probes", "bgp", "flights", "canaries")
+SECTIONS = ("heartbeats", "probes", "bgp", "flights", "canaries", "ioda", "country_routing")
 
 
 def utcnow():
@@ -253,9 +271,104 @@ def check_one_canary(region, cfg):
     return entry
 
 
+# ---------------------------------------------------------------------- ioda
+
+def parse_ioda_signals(data):
+    """Latest non-null value (and its timestamp) for each tracked IODA datasource."""
+    out = {key: None for key in IODA_SERIES.values()}
+    series_list = (data.get("data") or [[]])[0] or []
+    for s in series_list:
+        key = IODA_SERIES.get(s.get("datasource"))
+        if not key:
+            continue
+        values = s.get("values") or []
+        start = s.get("from") or 0
+        step = s.get("step") or 0
+        for i in range(len(values) - 1, -1, -1):
+            v = values[i]
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                as_of = datetime.datetime.fromtimestamp(start + i * step, datetime.timezone.utc)
+                out[key] = {"value": v, "as_of": iso(as_of.replace(tzinfo=None))}
+                break
+    return out
+
+
+def parse_ioda_alerts(data):
+    """Summarise IODA outage alerts: latest level per datasource and which are still active."""
+    alerts = sorted(data.get("data") or [], key=lambda a: a.get("time") or 0)
+    latest = {}
+    for a in alerts:
+        ds = a.get("datasource")
+        if ds:
+            latest[ds] = {"level": a.get("level"), "time": a.get("time"), "condition": a.get("condition")}
+    active = {ds: v["level"] for ds, v in latest.items() if v["level"] and v["level"] != "normal"}
+    worst = max(active.values(), key=lambda lvl: IODA_LEVEL_RANK.get(lvl, 0)) if active else None
+    return {"count": len(alerts), "latest": latest, "active": active, "worst": worst}
+
+
+def check_one_ioda(cc):
+    entry = {"country": cc}
+    now = int(time.time())
+    try:
+        _, sig = fetch_json(
+            f"{IODA_BASE}/signals/raw/country/{cc}?from={now - IODA_SIGNAL_WINDOW_S}&until={now}",
+            TIMEOUT_IODA, retries=1)
+        entry["signals"] = parse_ioda_signals(sig)
+        _, al = fetch_json(
+            f"{IODA_BASE}/outages/alerts?entityType=country&entityCode={cc}"
+            f"&from={now - IODA_ALERT_WINDOW_S}&until={now}",
+            TIMEOUT_IODA, retries=1)
+        entry["alerts"] = parse_ioda_alerts(al)
+        entry["status"] = "ok"
+    except Exception as e:
+        entry["status"] = "error"
+        entry["error"] = str(e)
+    return entry
+
+
+# ------------------------------------------------------- country routing (RIS)
+
+def parse_country_ris(data):
+    """Latest daily RIS counts for a country plus the previous day's for a delta."""
+    stats = (data.get("data") or {}).get("stats") or []
+
+    def pick(s):
+        return {
+            "stats_date": (s.get("stats_date") or "")[:10],
+            "asns": s.get("asns_ris"),
+            "v4_prefixes": s.get("v4_prefixes_ris"),
+            "v6_prefixes": s.get("v6_prefixes_ris"),
+        }
+
+    if not stats:
+        return {"stats_date": None, "asns": None, "v4_prefixes": None, "v6_prefixes": None, "prev": None}
+    out = pick(stats[-1])
+    out["prev"] = pick(stats[-2]) if len(stats) > 1 else None
+    return out
+
+
+def check_one_country_ris(cc):
+    entry = {"country": cc}
+    try:
+        start = (utcnow() - datetime.timedelta(days=COUNTRY_RIS_DAYS)).strftime("%Y-%m-%d")
+        url = f"{COUNTRY_RIS_BASE}?resource={cc}&resolution=1d&starttime={start}&sourceapp=scout-sentinel"
+        _, data = fetch_json(url, TIMEOUT_COUNTRY_RIS, retries=1)
+        entry.update(parse_country_ris(data))
+        entry["status"] = "ok"
+    except Exception as e:
+        entry["status"] = "error"
+        entry["error"] = str(e)
+    return entry
+
+
+def is_hourly_sample(now):
+    """Country RIS stats are daily; sample them on the first run of each hour only."""
+    return now.minute < 5
+
+
 # ------------------------------------------------------------------- collect
 
-def build_tasks():
+def build_tasks(hourly=False):
     tasks = []
     for region, url in ENDPOINTS.items():
         tasks.append(("heartbeats", check_one_heartbeat, (region, url)))
@@ -268,12 +381,19 @@ def build_tasks():
     tasks.append(("flights", check_flights, ()))
     for region, cfg in CANARIES.items():
         tasks.append(("canaries", check_one_canary, (region, cfg)))
+    for cc in PROBE_COUNTRIES:
+        tasks.append(("ioda", check_one_ioda, (cc,)))
+    if hourly:
+        for cc in PROBE_COUNTRIES:
+            tasks.append(("country_routing", check_one_country_ris, (cc,)))
     return tasks
 
 
-def collect():
+def collect(now=None):
     """Run every check concurrently and assemble the log entry sections."""
-    tasks = build_tasks()
+    now = now or utcnow()
+    hourly = is_hourly_sample(now)
+    tasks = build_tasks(hourly=hourly)
     results = {name: [] for name in SECTIONS}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = [(section, pool.submit(fn, *args)) for section, fn, args in tasks]
@@ -284,13 +404,20 @@ def collect():
             else:
                 results[section].append(out)
 
-    return {
+    out = {
         "heartbeats": {"results": results["heartbeats"], "summary": reachability_summary(results["heartbeats"])},
         "probes": {"results": results["probes"], "summary": section_summary(results["probes"])},
         "bgp": {"results": results["bgp"], "summary": section_summary(results["bgp"])},
         "flights": {"results": results["flights"], "summary": section_summary(results["flights"])},
         "canaries": {"results": results["canaries"], "summary": reachability_summary(results["canaries"])},
+        "ioda": {"results": results["ioda"], "summary": section_summary(results["ioda"])},
     }
+    if hourly:
+        out["country_routing"] = {
+            "results": results["country_routing"],
+            "summary": section_summary(results["country_routing"]),
+        }
+    return out
 
 
 def append_jsonl(s3, key, line):
@@ -306,13 +433,13 @@ def handler(event, context):
     t0 = time.monotonic()
 
     log_entry = {"timestamp": iso(now)}
-    log_entry.update(collect())
+    log_entry.update(collect(now))
     log_entry["collect_seconds"] = round(time.monotonic() - t0, 2)
 
     key = f"{PREFIX}{now.strftime('%Y/%m/%d')}/heartbeats.jsonl"
     append_jsonl(boto3.client("s3"), key, json.dumps(log_entry) + "\n")
 
-    summary = {name: log_entry[name]["summary"] for name in SECTIONS}
+    summary = {name: log_entry[name]["summary"] for name in SECTIONS if name in log_entry}
     print(json.dumps({"logged": key, "collect_seconds": log_entry["collect_seconds"], "summary": summary}))
 
     return {"statusCode": 200, "body": json.dumps({"logged": True, "key": key, "sections": list(log_entry.keys())})}

@@ -87,6 +87,36 @@ def test_carry_forward_noop_when_current_sample_succeeded():
     assert current["timestamp"] == "2026-10-03T00:05:00Z"
 
 
+def test_slim_entry_ioda_worst_level():
+    e = make_entry("2026-10-03T00:00:00Z")
+    e["ioda"] = {
+        "results": [
+            {"country": "IL", "status": "ok", "alerts": {"worst": "warning"}},
+            {"country": "HK", "status": "ok", "alerts": {"worst": "critical"}},
+            {"country": "TW", "status": "error"},
+        ],
+        "summary": {"total": 3, "ok": 2, "errors": 1},
+    }
+    slim = api.slim_entry(e)
+    assert slim["ioda"] == {"total": 3, "ok": 2, "errors": 1}
+    assert slim["ioda_worst"] == "critical"
+
+
+def test_slim_entry_ioda_worst_none_when_quiet():
+    e = make_entry("2026-10-03T00:00:00Z")
+    e["ioda"] = {"results": [{"country": "IL", "status": "ok", "alerts": {"worst": None}}], "summary": {"total": 1, "ok": 1, "errors": 0}}
+    assert api.slim_entry(e)["ioda_worst"] is None
+
+
+def test_carry_forward_country_routing_from_hourly_sample():
+    hourly = make_entry("2026-10-03T00:00:00Z")
+    hourly["country_routing"] = {"results": [{"country": "TW", "status": "ok", "asns": 243}], "summary": {"total": 1, "ok": 1, "errors": 0}}
+    later = make_entry("2026-10-03T00:05:00Z")
+    current = api.carry_forward([hourly, later], "country_routing")
+    assert current["country_routing"]["results"][0]["asns"] == 243
+    assert current["country_routing_as_of"] == "2026-10-03T00:00:00Z"
+
+
 def test_bgp_baseline_is_median_over_ok_samples():
     entries = [
         make_entry("t1", prefixes=100, vis=1.0),

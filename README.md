@@ -8,9 +8,11 @@ Multi-signal ground-truth health checks for conflict-zone infrastructure, indepe
 
 A geopolitical early-warning system that samples several independent signal sources every 5 minutes and shows them side by side:
 
-- **AWS Lambda heartbeats** in 3 conflict-zone regions behind API Gateways
+- **AWS Lambda heartbeats** in 4 regions (UAE, Israel, Hong Kong, Taipei) behind API Gateways
 - **TCP canary** for Bahrain (me-south-1), where no Lambda can run since the March 2026 strikes
 - **BGP routing visibility** and announced-prefix counts for 9 major ISP ASNs across 5 countries (RIPEstat)
+- **Country-level routing totals** (RIS-observed ASNs and prefixes per country) from RIPEstat, sampled hourly
+- **IODA country signals** (Georgia Tech): BGP-visible /24s, active-probing /24s, darknet telescope, Google traffic index, plus IODA's own outage alerts
 - **RIPE Atlas probe counts** (connected vs disconnected) in 5 countries
 - **ADS-B airspace activity** in 4 zones via adsb.lol: aircraft, military aircraft, and GPS-degraded positions (a GNSS jamming signature)
 - **Route 53 health checks** with CloudWatch alarms and SNS email alerts on the AWS endpoints
@@ -20,17 +22,26 @@ Azure Function heartbeats were part of the original design. The Azure subscripti
 
 ## Signal Sources
 
-### AWS Heartbeats (3 regions)
+### AWS Heartbeats (4 regions)
 
 | Region | Endpoint |
 |---|---|
 | UAE (me-central-1) | https://m6rjrc7hrc.execute-api.me-central-1.amazonaws.com/ |
 | Israel (il-central-1) | https://c3icm0os4i.execute-api.il-central-1.amazonaws.com/ |
 | Hong Kong (ap-east-1) | https://jhxmflrny5.execute-api.ap-east-1.amazonaws.com/ |
+| Taipei (ap-east-2) | https://8hhwdbtp3e.execute-api.ap-east-2.amazonaws.com/ |
 
 ### Bahrain Canary
 
-The logger opens a TCP connection to `s3.me-south-1.amazonaws.com:443` every run. The region has been unreachable since the March 1-2, 2026 drone strikes. The dashboard card flips from "CANARY — OFFLINE" to "CANARY — REACHABLE" automatically when the region returns.
+The logger opens a TCP connection to `s3.me-south-1.amazonaws.com:443` every run. The region has been unreachable since the March 1-2, 2026 drone strikes. In September 2026 AWS said the Bahrain region cannot be restored and that it will share a recovery timeline in early 2027. Every me-south-1 service endpoint still resolves in DNS but none accepts a connection. The dashboard card flips from "CANARY — OFFLINE" to "CANARY — REACHABLE" automatically if the region ever returns.
+
+### IODA Country Signals (5 countries)
+
+Two calls per country per run against the public IODA API (`api.ioda.inetintel.cc.gatech.edu/v2`), no account needed. The logger records the latest non-null value and its timestamp for four raw series (`bgp`, `ping-slash24`, `merit-nt`, `gtr-norm`) and summarises the outage alerts of the last 24 hours: latest level per detector and which detectors are still in `warning` or `critical`. The dashboard uses the alert feed, not thresholds on the raw series, to colour the IODA row on each region card.
+
+### Country Routing Totals (5 countries)
+
+RIPEstat `country-resource-stats` at daily resolution with an 8-day start time (about 3 KB per call). Records RIS-observed ASN, IPv4 prefix, and IPv6 prefix counts for the latest day and the previous day. Sampled on the first run of each hour; the API carries the last successful sample forward.
 
 ### BGP Monitoring (9 ASNs, 5 countries)
 
@@ -72,6 +83,7 @@ Point queries against `api.adsb.lol/v2/point`. No account needed. Requests are s
 | me-central-1 | Lambda `region-heartbeat`, API Gateway `m6rjrc7hrc` | Health check `c3f9f441-5a37-462a-b6d2-0c31441539db`, alarm `ME-Central-1-UAE-Unhealthy` |
 | il-central-1 | Lambda `region-heartbeat`, API Gateway `c3icm0os4i` | Health check `8fe97cb9-0007-4e90-839d-cdeb4331715d`, alarm `IL-Central-1-TelAviv-Unhealthy` |
 | ap-east-1 | Lambda `region-heartbeat`, API Gateway `jhxmflrny5` | Health check `fb07f4da-cef8-41a7-91b5-afd9965dd1a8`, alarm `AP-East-1-HongKong-Unhealthy` |
+| ap-east-2 | Lambda `region-heartbeat`, API Gateway `8hhwdbtp3e` | Health check `c11f2f25-9f6d-4ae6-aad1-a42bc84842f7`, alarm `AP-East-2-Taipei-Unhealthy` |
 | me-south-1 | No resources. The former Route 53 TCP health check has been deleted; the logger's TCP canary replaces it. | |
 | us-east-1 | Lambda `heartbeat-logger` (Python 3.12, 256 MB, 120 s) | EventBridge rule `heartbeat-logger-schedule`, every 5 min |
 | us-east-1 | Lambda `sentinel-dashboard-api` (Python 3.12, 256 MB, 15 s) | API Gateway HTTP API `dy5td5v3n7`, `GET /api/status` |
@@ -92,7 +104,7 @@ DNS: Porkbun CNAME `sonde` → `d3isdvutafytq9.cloudfront.net`. AWS account `290
 
 ### Log Line Format
 
-Each JSONL line has `timestamp`, `collect_seconds`, and five sections, each with `results` and `summary`:
+Each JSONL line has `timestamp`, `collect_seconds`, and up to seven sections, each with `results` and `summary` (`country_routing` only on hourly runs):
 
 | Section | Per-result fields |
 |---|---|
@@ -101,6 +113,8 @@ Each JSONL line has `timestamp`, `collect_seconds`, and five sections, each with
 | `bgp` | `country`, `asn`, `name`, `status`, `v4_visibility`, `v4_peers_seeing`, `v4_total_peers`, `v6_visibility`, `announced_prefixes`, `announced_prefixes_v6`, `observed_neighbours` |
 | `flights` | `zone`, `status`, `aircraft_count`, `military_count`, `gps_sampled`, `gps_degraded_count` |
 | `canaries` | `region`, `label`, `host`, `port`, `reachable`, `latency_ms` |
+| `ioda` | `country`, `status`, `signals` (`bgp`, `ping`, `telescope`, `gtr_norm`, each `{value, as_of}`), `alerts` (`count`, `latest`, `active`, `worst`) |
+| `country_routing` | `country`, `status`, `stats_date`, `asns`, `v4_prefixes`, `v6_prefixes`, `prev` |
 
 Entries written before October 2026 have an `azure_heartbeats` section, lack `canaries`, and only carry `flights` every 20 minutes. The API and dashboard tolerate both shapes.
 
@@ -124,7 +138,7 @@ python -c "import sys; sys.path.insert(0,'lambda'); import heartbeat_logger as h
 .\deploy.ps1 logger                    # heartbeat-logger
 .\deploy.ps1 api                       # sentinel-dashboard-api
 .\deploy.ps1 dashboard                 # index.html to S3 + CloudFront invalidation
-.\deploy.ps1 heartbeat -Region ap-east-1   # one regional heartbeat Lambda
+.\deploy.ps1 heartbeat -Region ap-east-2   # one regional heartbeat Lambda
 .\deploy.ps1 all                       # logger + api + dashboard
 ```
 
@@ -134,4 +148,4 @@ Kept for reference. `azure/` is the Python function (UAE North, East Asia); `azu
 
 ## Context
 
-Both Middle East AWS regions were physically attacked by drone strikes on March 1-2, 2026, and me-south-1 has been offline since. Israel (il-central-1) monitors the broader Middle East conflict zone. Hong Kong (ap-east-1) and the Taiwan BGP and probe signals serve as early warning for Taiwan Strait escalation. This system provides independent, multi-signal ground-truth verification of regional stability.
+Both Middle East AWS regions were physically attacked by drone strikes on March 1-2, 2026, and me-south-1 has been offline since. Israel (il-central-1) monitors the broader Middle East conflict zone. Hong Kong (ap-east-1) and Taipei (ap-east-2, added October 2026) serve as early warning for Taiwan Strait escalation. This system provides independent, multi-signal ground-truth verification of regional stability.
