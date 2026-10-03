@@ -1,114 +1,148 @@
-import json
+"""Sentinel dashboard API.
+
+GET /api/status -> {
+    current:       latest full JSONL entry (flights carried forward from the
+                   last successful sample when the latest one failed),
+    timeline:      last 24h of slimmed entries (summaries + a few scalars),
+    bgp_baseline:  per-ASN 24h medians of visibility and announced prefixes,
+    generated_at, data_age_s, entries_count
+}
+"""
 import datetime
+import json
+import statistics
+
 import boto3
 
 BUCKET = "atlas-sentinel-data"
 PREFIX = "heartbeat-logs/"
+WINDOW_HOURS = 24
+MAX_TIMELINE = 288  # 24h at 5-minute cadence
+
+
+def utcnow():
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def parse_ts(ts):
+    return datetime.datetime.fromisoformat(ts.rstrip("Z"))
 
 
 def slim_entry(entry):
-    """Slim a full JSONL entry to just summaries for the timeline."""
+    """Reduce a full JSONL entry to what the 24h timeline needs."""
     out = {"timestamp": entry.get("timestamp")}
+    out["heartbeats"] = (entry.get("heartbeats") or {}).get("summary", {})
+    out["probes"] = (entry.get("probes") or {}).get("summary", {})
 
-    hb = entry.get("heartbeats", {})
-    out["heartbeats"] = hb.get("summary", {})
-
-    azure = entry.get("azure_heartbeats")
-    if azure:
-        out["azure"] = azure.get("summary", {})
-
-    bgp = entry.get("bgp", {})
+    bgp = entry.get("bgp") or {}
     out["bgp"] = bgp.get("summary", {})
-    # Include per-ASN status for the detail table
-    out["bgp_detail"] = [
-        {
-            "country": r.get("country"),
-            "asn": r.get("asn"),
-            "name": r.get("name"),
-            "status": r.get("status"),
-            "v4_visibility": r.get("v4_visibility"),
-        }
-        for r in bgp.get("results", [])
-    ]
-
-    probes = entry.get("probes", {})
-    out["probes"] = probes.get("summary", {})
-    out["probe_detail"] = [
-        {
-            "country": r.get("country"),
-            "connected": r.get("connected"),
-            "disconnected": r.get("disconnected"),
-            "status": r.get("status"),
-        }
-        for r in probes.get("results", [])
-    ]
+    vis = [r.get("v4_visibility") for r in bgp.get("results", [])
+           if r.get("status") == "ok" and r.get("v4_visibility") is not None]
+    out["bgp_min_visibility"] = min(vis) if vis else None
 
     flights = entry.get("flights")
     if flights:
         out["flights"] = flights.get("summary", {})
-        out["flight_detail"] = [
-            {
-                "zone": r.get("zone"),
-                "aircraft_count": r.get("aircraft_count"),
-                "status": r.get("status"),
-            }
-            for r in flights.get("results", [])
-        ]
+        ok = [r for r in flights.get("results", []) if r.get("status") == "ok"]
+        out["flights_totals"] = {
+            "aircraft": sum(r.get("aircraft_count") or 0 for r in ok),
+            "military": sum(r.get("military_count") or 0 for r in ok),
+            "gps_sampled": sum(r.get("gps_sampled") or 0 for r in ok),
+            "gps_degraded": sum(r.get("gps_degraded_count") or 0 for r in ok),
+        }
 
+    canaries = entry.get("canaries") or {}
+    out["canaries"] = {r.get("region"): bool(r.get("reachable")) for r in canaries.get("results", [])}
+    return out
+
+
+def flights_succeeded(entry):
+    return bool(((entry.get("flights") or {}).get("summary") or {}).get("ok"))
+
+
+def carry_forward_flights(entries):
+    """Return the latest entry; if its flight sample failed, borrow the last good one."""
+    if not entries:
+        return None
+    current = entries[-1]
+    if flights_succeeded(current):
+        return current
+    for e in reversed(entries[:-1]):
+        if flights_succeeded(e):
+            current["flights"] = e["flights"]
+            current["flights_as_of"] = e["timestamp"]
+            break
+    return current
+
+
+def bgp_baseline(entries):
+    """Per-ASN medians over the window, used to spot prefix withdrawals and visibility drops."""
+    prefixes = {}
+    visibility = {}
+    for e in entries:
+        for r in (e.get("bgp") or {}).get("results", []):
+            if r.get("status") != "ok":
+                continue
+            asn = r.get("asn")
+            # Zero is never a real baseline for a live ISP; legacy entries recorded 0 by mistake.
+            if r.get("announced_prefixes"):
+                prefixes.setdefault(asn, []).append(r["announced_prefixes"])
+            if r.get("v4_visibility") is not None:
+                visibility.setdefault(asn, []).append(r["v4_visibility"])
+    out = {}
+    for asn in set(prefixes) | set(visibility):
+        p = prefixes.get(asn, [])
+        v = visibility.get(asn, [])
+        out[asn] = {
+            "prefixes": int(round(statistics.median(p))) if p else None,
+            "visibility": round(statistics.median(v), 3) if v else None,
+            "samples": max(len(p), len(v)),
+        }
     return out
 
 
 def read_day(s3, date_str):
-    """Read all JSONL entries for a given date. Returns list of dicts."""
     key = f"{PREFIX}{date_str}/heartbeats.jsonl"
     try:
         body = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode()
-        entries = []
-        for line in body.strip().split("\n"):
-            if line.strip():
-                entries.append(json.loads(line))
-        return entries
-    except s3.exceptions.NoSuchKey:
-        return []
     except Exception:
         return []
+    entries = []
+    for line in body.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
 
 
 def handler(event, context):
-    now = datetime.datetime.utcnow()
+    now = utcnow()
     today = now.strftime("%Y/%m/%d")
     yesterday = (now - datetime.timedelta(days=1)).strftime("%Y/%m/%d")
 
     s3 = boto3.client("s3")
-
-    # Read today + yesterday to always have 24h of data
     entries = read_day(s3, yesterday) + read_day(s3, today)
 
-    # Keep only last 24 hours
-    cutoff = (now - datetime.timedelta(hours=24)).isoformat() + "Z"
+    cutoff = (now - datetime.timedelta(hours=WINDOW_HOURS)).isoformat() + "Z"
     entries = [e for e in entries if e.get("timestamp", "") >= cutoff]
-
-    # Sort by timestamp
     entries.sort(key=lambda e: e.get("timestamp", ""))
+    entries = entries[-MAX_TIMELINE:]
 
-    # Latest entry is the current state (full detail)
-    current = entries[-1] if entries else None
-
-    # Carry forward most recent flight data if current entry lacks it
-    if current and "flights" not in current:
-        for e in reversed(entries[:-1]):
-            if "flights" in e:
-                current["flights"] = e["flights"]
-                current["flights_as_of"] = e["timestamp"]
-                break
-
-    # Timeline: slim summaries, keep last 288 (24h at 5-min intervals)
-    timeline = [slim_entry(e) for e in entries[-288:]]
+    current = carry_forward_flights(entries)
+    data_age_s = None
+    if current and current.get("timestamp"):
+        data_age_s = int((now - parse_ts(current["timestamp"])).total_seconds())
 
     payload = {
         "current": current,
-        "timeline": timeline,
+        "timeline": [slim_entry(e) for e in entries],
+        "bgp_baseline": bgp_baseline(entries),
         "generated_at": now.isoformat() + "Z",
+        "data_age_s": data_age_s,
         "entries_count": len(entries),
     }
 

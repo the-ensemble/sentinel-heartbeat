@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SENTINEL — Infrastructure Ground Truth</title>
+<meta name="description" content="Independent, multi-signal ground-truth monitoring of internet and cloud infrastructure in conflict zones.">
 <style>
 :root {
   --bg: #0d1117;
@@ -15,9 +16,11 @@
   --amber: #d29922;
   --red: #f85149;
   --blue: #58a6ff;
+  --purple: #a371f7;
   --green-bg: rgba(63,185,80,0.12);
   --amber-bg: rgba(210,153,34,0.12);
   --red-bg: rgba(248,81,73,0.12);
+  --purple-bg: rgba(163,113,247,0.12);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -26,13 +29,15 @@ body {
   color: var(--text);
   min-height: 100vh;
 }
-.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px 16px; }
 
 /* --- Header --- */
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 24px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
@@ -68,6 +73,19 @@ header {
   text-transform: uppercase;
   margin: 28px 0 12px;
 }
+.section-sub { font-size: 11px; color: var(--text-dim); margin: -8px 0 12px; letter-spacing: 0; text-transform: none; }
+
+/* --- Banners --- */
+.banner {
+  padding: 10px 16px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  display: none;
+  border: 1px solid;
+}
+.banner.red { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+.banner.amber { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
 
 /* --- Region cards --- */
 .region-grid {
@@ -88,17 +106,22 @@ header {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 3px;
+  background: var(--border);
 }
 .region-card.ok::before { background: var(--green); }
 .region-card.warn::before { background: var(--amber); }
 .region-card.down::before { background: var(--red); }
-.region-card.canary::before { background: var(--red); }
-.region-card.canary { border-color: rgba(248,81,73,0.3); }
+.region-card.err::before { background: var(--purple); }
+.region-card.down { border-color: rgba(248,81,73,0.3); }
 
 .region-name {
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .region-tag {
   font-size: 11px;
@@ -118,18 +141,19 @@ header {
 .signal-value.ok { color: var(--green); }
 .signal-value.warn { color: var(--amber); }
 .signal-value.down { color: var(--red); }
+.signal-value.err { color: var(--purple); }
 .signal-value.na { color: var(--text-dim); }
-.canary-label {
+.pill {
   display: inline-block;
-  background: rgba(248,81,73,0.15);
-  color: var(--red);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1px;
   padding: 2px 8px;
   border-radius: 4px;
-  margin-left: 8px;
 }
+.pill.down { background: var(--red-bg); color: var(--red); }
+.pill.ok { background: var(--green-bg); color: var(--green); }
+.pill.err { background: var(--purple-bg); color: var(--purple); }
 
 /* --- Timeline --- */
 .timeline-container {
@@ -168,6 +192,7 @@ header {
 .timeline-cell.ok { background: var(--green); }
 .timeline-cell.warn { background: var(--amber); }
 .timeline-cell.down { background: var(--red); }
+.timeline-cell.err { background: var(--purple); }
 .timeline-cell.none { background: var(--border); }
 .timeline-axis {
   display: flex;
@@ -180,18 +205,42 @@ header {
   color: var(--text-dim);
   text-align: center;
 }
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.legend i {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.legend i.ok { background: var(--green); }
+.legend i.warn { background: var(--amber); }
+.legend i.down { background: var(--red); }
+.legend i.err { background: var(--purple); }
+.legend i.none { background: var(--border); }
 
-/* --- BGP table --- */
-.bgp-table {
-  width: 100%;
-  border-collapse: collapse;
+/* --- Tables --- */
+.table-wrap {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 12px;
 }
-.bgp-table th {
+th {
   text-align: left;
   padding: 10px 12px;
   background: rgba(88,166,255,0.06);
@@ -201,12 +250,14 @@ header {
   text-transform: uppercase;
   letter-spacing: 1px;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
-.bgp-table td {
+td {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
-.bgp-table tr:last-child td { border-bottom: none; }
+tr:last-child td { border-bottom: none; }
 .vis-bar {
   display: inline-block;
   height: 6px;
@@ -216,11 +267,14 @@ header {
   vertical-align: middle;
   margin-right: 6px;
 }
+.delta { color: var(--text-dim); font-size: 11px; margin-left: 4px; }
+.delta.warn { color: var(--amber); }
+.delta.down { color: var(--red); }
 
 /* --- Flight zones --- */
 .flight-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
 .flight-card {
@@ -228,7 +282,6 @@ header {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 14px;
-  text-align: center;
 }
 .flight-zone-name {
   font-size: 12px;
@@ -236,13 +289,16 @@ header {
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 4px;
+  text-align: center;
 }
 .flight-count {
   font-size: 28px;
   font-weight: 700;
-  color: var(--blue);
+  color: var(--text);
+  text-align: center;
 }
-.flight-label { font-size: 11px; color: var(--text-dim); }
+.flight-label { font-size: 11px; color: var(--text-dim); text-align: center; margin-bottom: 8px; }
+.flight-note { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; text-align: center; }
 
 /* --- Footer --- */
 footer {
@@ -252,25 +308,15 @@ footer {
   font-size: 11px;
   color: var(--text-dim);
   text-align: center;
+  line-height: 1.7;
 }
 footer a { color: var(--blue); text-decoration: none; }
 
-/* --- Loading/Error --- */
 .loading {
   text-align: center;
   padding: 60px;
   color: var(--text-dim);
   font-size: 14px;
-}
-.error-banner {
-  background: var(--red-bg);
-  border: 1px solid var(--red);
-  color: var(--red);
-  padding: 10px 16px;
-  border-radius: 6px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  display: none;
 }
 </style>
 </head>
@@ -286,7 +332,8 @@ footer a { color: var(--blue); text-decoration: none; }
     </div>
   </header>
 
-  <div class="error-banner" id="errorBanner"></div>
+  <div class="banner red" id="errorBanner"></div>
+  <div class="banner amber" id="staleBanner"></div>
 
   <div id="content">
     <div class="loading" id="loadingMsg">Connecting to Sentinel API...</div>
@@ -295,164 +342,148 @@ footer a { color: var(--blue); text-decoration: none; }
 
 <script>
 const API_URL = 'https://dy5td5v3n7.execute-api.us-east-1.amazonaws.com/api/status';
+const STALE_AFTER_S = 15 * 60;
 
-// Region config: maps data to display
+// BGP visibility thresholds (fraction of RIPE RIS peers seeing the ASN's routes)
+const BGP_WARN_BELOW = 0.90;
+const BGP_DOWN_BELOW = 0.50;
+// Prefix count vs 24h median: a large withdrawal is a routing event even if visibility holds
+const PREFIX_WARN_RATIO = 0.80;
+const PREFIX_DOWN_RATIO = 0.50;
+// Share of ADS-B positions with degraded GPS integrity
+const GPS_WARN_SHARE = 0.10;
+const GPS_DOWN_SHARE = 0.25;
+
 const REGIONS = {
-  'UAE': {
-    label: 'United Arab Emirates',
-    tag: 'me-central-1 / uaenorth',
-    aws: 'me-central-1',
-    azure: 'uaenorth',
-    probeCC: 'AE',
-    bgpCountry: 'AE',
-  },
-  'Israel': {
-    label: 'Israel',
-    tag: 'il-central-1 / israelcentral',
-    aws: 'il-central-1',
-    azure: 'israelcentral',
-    probeCC: 'IL',
-    bgpCountry: 'IL',
-  },
-  'Hong Kong': {
-    label: 'Hong Kong',
-    tag: 'ap-east-1 / eastasia',
-    aws: 'ap-east-1',
-    azure: 'eastasia',
-    probeCC: 'HK',
-    bgpCountry: 'HK',
-  },
-  'Bahrain': {
-    label: 'Bahrain',
-    tag: 'me-south-1 — CANARY',
-    aws: null,
-    azure: null,
-    probeCC: 'BH',
-    bgpCountry: 'BH',
-    canary: true,
-  },
-  'Taiwan': {
-    label: 'Taiwan',
-    tag: 'BGP + Probes only',
-    aws: null,
-    azure: null,
-    probeCC: 'TW',
-    bgpCountry: 'TW',
-  },
+  'UAE':       { label: 'United Arab Emirates', tag: 'me-central-1', aws: 'me-central-1', probeCC: 'AE', bgpCountry: 'AE' },
+  'Israel':    { label: 'Israel', tag: 'il-central-1', aws: 'il-central-1', probeCC: 'IL', bgpCountry: 'IL' },
+  'Hong Kong': { label: 'Hong Kong', tag: 'ap-east-1', aws: 'ap-east-1', probeCC: 'HK', bgpCountry: 'HK' },
+  'Bahrain':   { label: 'Bahrain', tag: 'me-south-1 — TCP canary', canary: 'me-south-1', probeCC: 'BH', bgpCountry: 'BH' },
+  'Taiwan':    { label: 'Taiwan', tag: 'BGP + probes only', probeCC: 'TW', bgpCountry: 'TW' },
 };
 
 const FLIGHT_ZONE_LABELS = {
-  'israel': 'Israel Airspace',
-  'persian_gulf': 'Persian Gulf',
-  'taiwan_strait': 'Taiwan Strait',
-  'hong_kong': 'Hong Kong FIR',
+  israel: 'Israel Airspace',
+  persian_gulf: 'Persian Gulf',
+  taiwan_strait: 'Taiwan Strait',
+  hong_kong: 'Hong Kong FIR',
 };
+
+const STATUS_LABEL = { ok: 'Healthy', warn: 'Degraded', down: 'Down', err: 'No data', none: 'Not sampled' };
 
 let lastData = null;
 
-function getHeartbeatStatus(data, region) {
-  if (!region) return null;
-  const results = data?.heartbeats?.results || [];
-  const r = results.find(h => h.region === region);
-  return r ? (r.reachable ? 'ok' : 'down') : null;
+// ---------------------------------------------------------------- helpers
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function getAzureStatus(data, region) {
-  if (!region) return null;
-  const results = data?.azure_heartbeats?.results || [];
-  const r = results.find(h => h.region === region);
-  return r ? (r.reachable ? 'ok' : 'down') : null;
+function fmtUTC(ts, withSeconds) {
+  if (!ts) return '—';
+  const opts = { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'UTC' };
+  if (withSeconds) opts.second = '2-digit';
+  return new Date(ts).toLocaleTimeString('en-GB', opts) + ' UTC';
 }
 
-function getProbeData(data, cc) {
-  if (!cc) return null;
-  const results = data?.probes?.results || [];
-  return results.find(p => p.country === cc) || null;
-}
-
-function getBgpForCountry(data, cc) {
-  if (!cc) return [];
-  const results = data?.bgp?.results || [];
-  return results.filter(b => b.country === cc);
-}
-
+// Worst of the real signals. Collector errors ('err') never make a region red on their own.
 function worstStatus(...statuses) {
-  const valid = statuses.filter(s => s !== null);
+  const valid = statuses.filter(s => s);
   if (valid.includes('down')) return 'down';
   if (valid.includes('warn')) return 'warn';
   if (valid.includes('ok')) return 'ok';
-  return 'na';
+  if (valid.includes('err')) return 'err';
+  return 'none';
 }
 
-function bgpStatus(entries) {
-  if (!entries.length) return null;
-  const ok = entries.filter(e => e.status === 'ok').length;
-  if (ok === entries.length) return 'ok';
-  if (ok === 0) return 'down';
-  return 'warn';
+function visibilityStatus(vis) {
+  if (vis == null) return 'err';
+  if (vis < BGP_DOWN_BELOW) return 'down';
+  if (vis < BGP_WARN_BELOW) return 'warn';
+  return 'ok';
 }
 
-function formatTime(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
-    ' UTC';
+function prefixStatus(prefixes, baseline) {
+  if (prefixes == null || !baseline) return 'ok';
+  const ratio = prefixes / baseline;
+  if (ratio < PREFIX_DOWN_RATIO) return 'down';
+  if (ratio < PREFIX_WARN_RATIO) return 'warn';
+  return 'ok';
 }
 
-function renderRegionCards(current) {
+function asnStatus(r, baseline) {
+  if (r.status !== 'ok') return 'err';
+  return worstStatus(visibilityStatus(r.v4_visibility), prefixStatus(r.announced_prefixes, baseline?.prefixes));
+}
+
+// Status for a group of ASNs: ignore collector errors if at least one answered.
+function bgpGroupStatus(entries, baselines) {
+  if (!entries.length) return 'none';
+  const ok = entries.filter(e => e.status === 'ok');
+  if (!ok.length) return 'err';
+  return worstStatus(...ok.map(e => asnStatus(e, baselines?.[e.asn])));
+}
+
+function getHeartbeat(data, region) {
+  if (!region) return null;
+  return (data?.heartbeats?.results || []).find(h => h.region === region) || null;
+}
+function getCanary(data, region) {
+  if (!region) return null;
+  return (data?.canaries?.results || []).find(c => c.region === region) || null;
+}
+function getProbe(data, cc) {
+  return (data?.probes?.results || []).find(p => p.country === cc) || null;
+}
+function getBgp(data, cc) {
+  return (data?.bgp?.results || []).filter(b => b.country === cc);
+}
+
+function signalRow(label, value, status) {
+  return `<div class="signal-row"><span class="signal-label">${esc(label)}</span><span class="signal-value ${status}">${esc(value)}</span></div>`;
+}
+
+// ------------------------------------------------------------ region cards
+
+function renderRegionCards(current, baselines) {
   let html = '';
   for (const [name, cfg] of Object.entries(REGIONS)) {
-    const awsStatus = cfg.canary ? 'down' : getHeartbeatStatus(current, cfg.aws);
-    const azureStatus = getAzureStatus(current, cfg.azure);
-    const probe = getProbeData(current, cfg.probeCC);
-    const bgpEntries = getBgpForCountry(current, cfg.bgpCountry);
-    const bgpSt = bgpStatus(bgpEntries);
+    const hb = getHeartbeat(current, cfg.aws);
+    const canary = getCanary(current, cfg.canary);
+    const probe = getProbe(current, cfg.probeCC);
+    const bgpEntries = getBgp(current, cfg.bgpCountry);
 
-    let overall;
-    if (cfg.canary) {
-      overall = 'canary';
-    } else {
-      overall = worstStatus(awsStatus, azureStatus, bgpSt);
-    }
+    const awsStatus = cfg.aws ? (hb ? (hb.reachable ? 'ok' : 'down') : 'err') : null;
+    const canaryStatus = cfg.canary ? (canary ? (canary.reachable ? 'ok' : 'down') : 'err') : null;
+    const probeStatus = probe ? (probe.status === 'ok' ? (probe.connected > 0 ? 'ok' : 'down') : 'err') : null;
+    const bgpSt = bgpGroupStatus(bgpEntries, baselines);
+    const overall = worstStatus(awsStatus, canaryStatus, probeStatus, bgpSt);
 
     html += `<div class="region-card ${overall}">`;
-    html += `<div class="region-name">${name}`;
-    if (cfg.canary) html += `<span class="canary-label">CANARY — OFFLINE</span>`;
+    html += `<div class="region-name">${esc(name)}`;
+    if (cfg.canary) {
+      html += `<span class="pill ${canaryStatus}">${canaryStatus === 'ok' ? 'CANARY — REACHABLE' : canaryStatus === 'down' ? 'CANARY — OFFLINE' : 'CANARY — NO DATA'}</span>`;
+    }
     html += `</div>`;
-    html += `<div class="region-tag">${cfg.tag}</div>`;
+    html += `<div class="region-tag">${esc(cfg.tag)}</div>`;
 
-    // AWS heartbeat
     if (cfg.aws) {
-      html += signalRow('AWS Heartbeat', awsStatus === 'ok' ? 'HEALTHY' : 'DOWN', awsStatus || 'na');
+      const v = awsStatus === 'ok' ? `HEALTHY ${hb.latency_ms != null ? hb.latency_ms + ' ms' : ''}`.trim() : awsStatus === 'down' ? 'DOWN' : 'NO DATA';
+      html += signalRow('AWS Heartbeat', v, awsStatus);
     }
-
-    // Azure heartbeat
-    if (cfg.azure) {
-      html += signalRow('Azure Heartbeat', azureStatus === 'ok' ? 'HEALTHY' : azureStatus === 'down' ? 'DOWN' : '—', azureStatus || 'na');
+    if (cfg.canary) {
+      const v = canaryStatus === 'ok' ? `TCP OK ${canary.latency_ms} ms` : canaryStatus === 'down' ? 'UNREACHABLE' : 'NO DATA';
+      html += signalRow(`TCP ${esc(canary?.host || 'canary')}`, v, canaryStatus);
     }
-
-    // Probes
     if (probe) {
       const total = (probe.connected || 0) + (probe.disconnected || 0);
-      html += signalRow('RIPE Probes', `${probe.connected}/${total}`, probe.connected > 0 ? 'ok' : 'down');
+      html += signalRow('RIPE Probes', probe.status === 'ok' ? `${probe.connected}/${total} up` : 'NO DATA', probeStatus);
     }
-
-    // BGP
     if (bgpEntries.length) {
-      const ok = bgpEntries.filter(e => e.status === 'ok').length;
-      html += signalRow('BGP Routing', `${ok}/${bgpEntries.length} ASNs`, bgpSt || 'na');
-    }
-
-    if (cfg.canary) {
-      html += signalRow('TCP Health Check', 'UNREACHABLE', 'down');
-      if (probe) {
-        const total = (probe.connected || 0) + (probe.disconnected || 0);
-        html += signalRow('RIPE Probes', `${probe.connected}/${total}`, probe.connected > 0 ? 'warn' : 'down');
-      }
-      if (bgpEntries.length) {
-        const ok = bgpEntries.filter(e => e.status === 'ok').length;
-        html += signalRow('BGP Routing', `${ok}/${bgpEntries.length} ASNs`, bgpSt || 'na');
-      }
+      const ok = bgpEntries.filter(e => e.status === 'ok');
+      const minVis = ok.length ? Math.min(...ok.map(e => e.v4_visibility ?? 1)) : null;
+      const v = ok.length ? `${(minVis * 100).toFixed(1)}% vis · ${ok.length}/${bgpEntries.length} ASNs` : 'NO DATA';
+      html += signalRow('BGP Routing', v, bgpSt);
     }
 
     html += '</div>';
@@ -460,161 +491,202 @@ function renderRegionCards(current) {
   return html;
 }
 
-function signalRow(label, value, status) {
-  return `<div class="signal-row"><span class="signal-label">${label}</span><span class="signal-value ${status}">${value}</span></div>`;
-}
+// ---------------------------------------------------------------- timeline
+
+const TIMELINE_ROWS = [
+  { label: 'AWS Heartbeats', key: e => {
+      const h = e.heartbeats; if (!h || !h.total) return 'none';
+      return h.healthy === h.total ? 'ok' : h.healthy > 0 ? 'warn' : 'down'; } },
+  { label: 'BGP Routing', key: e => {
+      if (!e.bgp || !e.bgp.total) return 'none';
+      if (!e.bgp.ok) return 'err';
+      return visibilityStatus(e.bgp_min_visibility); } },
+  { label: 'RIPE Probes', key: e => {
+      const p = e.probes; if (!p || !p.total) return 'none';
+      return p.ok === p.total ? 'ok' : p.ok > 0 ? 'warn' : 'err'; } },
+  { label: 'ADS-B Flights', key: e => {
+      const f = e.flights; if (!f || !f.total) return 'none';
+      return f.ok === f.total ? 'ok' : f.ok > 0 ? 'warn' : 'err'; } },
+  { label: 'Bahrain Canary', key: e => {
+      const c = e.canaries?.['me-south-1'];
+      return c === undefined ? 'none' : c ? 'ok' : 'down'; } },
+];
 
 function renderTimeline(timeline) {
-  if (!timeline || !timeline.length) return '<div class="timeline-container"><p style="color:var(--text-dim);text-align:center;padding:12px;">No timeline data</p></div>';
-
-  const rows = [
-    { label: 'AWS Heartbeats', key: (e) => e.heartbeats?.healthy === e.heartbeats?.total ? 'ok' : e.heartbeats?.healthy > 0 ? 'warn' : 'down' },
-    { label: 'Azure', key: (e) => e.azure ? (e.azure.healthy === e.azure.total ? 'ok' : e.azure.healthy > 0 ? 'warn' : 'down') : 'none' },
-    { label: 'BGP Routing', key: (e) => e.bgp?.ok === e.bgp?.total ? 'ok' : e.bgp?.ok > 0 ? 'warn' : 'down' },
-    { label: 'RIPE Probes', key: (e) => e.probes?.ok === e.probes?.total ? 'ok' : e.probes?.ok > 0 ? 'warn' : 'down' },
-    { label: 'Flights', key: (e) => e.flights ? (e.flights.ok > 0 ? 'ok' : 'down') : 'none' },
-  ];
-
+  if (!timeline || !timeline.length) {
+    return '<div class="timeline-container"><p style="color:var(--text-dim);text-align:center;padding:12px;">No timeline data</p></div>';
+  }
   let html = '<div class="timeline-container">';
-  for (const row of rows) {
-    html += '<div class="timeline-row">';
-    html += `<div class="timeline-label">${row.label}</div>`;
-    html += '<div class="timeline-bar">';
+  for (const row of TIMELINE_ROWS) {
+    html += `<div class="timeline-row"><div class="timeline-label">${esc(row.label)}</div><div class="timeline-bar">`;
     for (const entry of timeline) {
       const st = row.key(entry);
-      html += `<div class="timeline-cell ${st}" title="${entry.timestamp || ''}"></div>`;
+      html += `<div class="timeline-cell ${st}" title="${esc(fmtUTC(entry.timestamp))} — ${STATUS_LABEL[st]}"></div>`;
     }
     html += '</div></div>';
   }
-
-  // Time axis
-  html += '<div class="timeline-axis">';
-  if (timeline.length > 0) {
-    const first = new Date(timeline[0].timestamp);
-    const last = new Date(timeline[timeline.length - 1].timestamp);
-    html += `<span>${first.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'})} UTC</span>`;
-    const mid = new Date((first.getTime() + last.getTime()) / 2);
-    html += `<span>${mid.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'})} UTC</span>`;
-    html += `<span>${last.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'})} UTC</span>`;
+  const first = new Date(timeline[0].timestamp);
+  const last = new Date(timeline[timeline.length - 1].timestamp);
+  const mid = new Date((first.getTime() + last.getTime()) / 2);
+  html += `<div class="timeline-axis"><span>${fmtUTC(first)}</span><span>${fmtUTC(mid)}</span><span>${fmtUTC(last)}</span></div>`;
+  html += '<div class="legend">';
+  for (const st of ['ok', 'warn', 'down', 'err', 'none']) {
+    html += `<span><i class="${st}"></i>${STATUS_LABEL[st]}${st === 'err' ? ' (collector error)' : ''}</span>`;
   }
-  html += '</div>';
-  html += '</div>';
+  html += '</div></div>';
   return html;
 }
 
-function renderBgpTable(current) {
+// --------------------------------------------------------------- BGP table
+
+function renderBgpTable(current, baselines) {
   const results = current?.bgp?.results || [];
   if (!results.length) return '';
 
-  let html = '<table class="bgp-table"><thead><tr>';
-  html += '<th>Country</th><th>ASN</th><th>Name</th><th>Visibility</th><th>Peers</th><th>Status</th>';
+  let html = '<div class="table-wrap"><table><thead><tr>';
+  html += '<th>Country</th><th>ASN</th><th>Name</th><th>IPv4 Visibility</th><th>Peers</th><th>Prefixes (vs 24h)</th><th>Status</th>';
   html += '</tr></thead><tbody>';
 
   for (const r of results) {
+    const base = baselines?.[r.asn];
+    const st = asnStatus(r, base);
     const vis = r.v4_visibility != null ? (r.v4_visibility * 100).toFixed(1) + '%' : '—';
     const barWidth = r.v4_visibility != null ? Math.max(4, r.v4_visibility * 80) : 0;
-    const barColor = r.status === 'ok' ? (r.v4_visibility >= 0.95 ? 'var(--green)' : r.v4_visibility >= 0.5 ? 'var(--amber)' : 'var(--red)') : 'var(--red)';
+    const barColor = { ok: 'var(--green)', warn: 'var(--amber)', down: 'var(--red)', err: 'var(--purple)' }[st];
     const peers = r.v4_peers_seeing != null ? `${r.v4_peers_seeing}/${r.v4_total_peers}` : '—';
-    const statusClass = r.status === 'ok' ? 'ok' : 'down';
+
+    let prefixes = r.announced_prefixes != null ? String(r.announced_prefixes) : '—';
+    if (r.announced_prefixes != null && base?.prefixes) {
+      const d = r.announced_prefixes - base.prefixes;
+      const pst = prefixStatus(r.announced_prefixes, base.prefixes);
+      prefixes += `<span class="delta ${pst}">${d === 0 ? '±0' : (d > 0 ? '+' : '') + d}</span>`;
+    }
+    const label = { ok: 'OK', warn: 'DEGRADED', down: 'DOWN', err: 'NO DATA' }[st];
 
     html += '<tr>';
-    html += `<td>${r.country}</td>`;
-    html += `<td style="color:var(--blue)">${r.asn}</td>`;
-    html += `<td>${r.name}</td>`;
+    html += `<td>${esc(r.country)}</td>`;
+    html += `<td style="color:var(--blue)">${esc(r.asn)}</td>`;
+    html += `<td>${esc(r.name)}</td>`;
     html += `<td><span class="vis-bar" style="width:${barWidth}px;background:${barColor}"></span>${vis}</td>`;
     html += `<td>${peers}</td>`;
-    html += `<td><span class="signal-value ${statusClass}">${r.status?.toUpperCase() || '—'}</span></td>`;
+    html += `<td>${prefixes}</td>`;
+    html += `<td><span class="signal-value ${st}">${label}</span></td>`;
     html += '</tr>';
   }
-
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   return html;
 }
 
+// ----------------------------------------------------------------- flights
+
 function renderFlights(current) {
   const results = current?.flights?.results;
-  if (!results) return '<div class="flight-grid"><div class="flight-card"><div class="flight-zone-name">Flight Data</div><div class="flight-count" style="font-size:14px;color:var(--text-dim)">No flight data available</div></div></div>';
-
-  const asOf = current?.flights_as_of;
-  let ageNote = '';
-  if (asOf) {
-    const mins = Math.round((new Date() - new Date(asOf)) / 60000);
-    ageNote = `<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;text-align:center">Last sampled ${mins} min ago (OpenSky updates every 20 min)</div>`;
+  if (!results || !results.length) {
+    return '<div class="flight-grid"><div class="flight-card"><div class="flight-zone-name">Flight Data</div><div class="flight-label">No flight data available</div></div></div>';
   }
 
-  let html = ageNote + '<div class="flight-grid">';
+  let html = '';
+  if (current.flights_as_of) {
+    const mins = Math.round((new Date() - new Date(current.flights_as_of)) / 60000);
+    html += `<div class="flight-note">Latest sample failed — showing data from ${mins} min ago (${esc(fmtUTC(current.flights_as_of))})</div>`;
+  }
+
+  html += '<div class="flight-grid">';
   for (const r of results) {
     const label = FLIGHT_ZONE_LABELS[r.zone] || r.zone;
-    const count = r.aircraft_count != null ? r.aircraft_count : '—';
-    html += `<div class="flight-card">`;
-    html += `<div class="flight-zone-name">${label}</div>`;
-    html += `<div class="flight-count">${count}</div>`;
+    html += `<div class="flight-card"><div class="flight-zone-name">${esc(label)}</div>`;
+    if (r.status !== 'ok') {
+      html += `<div class="flight-count" style="font-size:16px;color:var(--purple)">NO DATA</div>`;
+      html += `<div class="flight-label">${esc((r.error || 'collector error').slice(0, 60))}</div></div>`;
+      continue;
+    }
+    html += `<div class="flight-count">${r.aircraft_count}</div>`;
     html += `<div class="flight-label">aircraft tracked</div>`;
-    html += `</div>`;
+
+    const mil = r.military_count || 0;
+    html += signalRow('Military', String(mil), mil > 0 ? 'warn' : 'na');
+
+    const sampled = r.gps_sampled || 0;
+    const degraded = r.gps_degraded_count || 0;
+    if (sampled > 0) {
+      const share = degraded / sampled;
+      const st = share >= GPS_DOWN_SHARE ? 'down' : share >= GPS_WARN_SHARE ? 'warn' : 'na';
+      html += signalRow('GPS degraded', `${degraded}/${sampled} (${(share * 100).toFixed(0)}%)`, st);
+    } else {
+      html += signalRow('GPS degraded', '—', 'na');
+    }
+    html += '</div>';
   }
   html += '</div>';
   return html;
 }
 
+// ------------------------------------------------------------------ render
+
 function render(data) {
   const current = data.current;
-  const timeline = data.timeline;
+  const timeline = data.timeline || [];
+  const baselines = data.bgp_baseline || {};
 
   if (!current) {
     document.getElementById('content').innerHTML = '<div class="loading">No data available yet</div>';
     return;
   }
 
-  document.getElementById('lastUpdated').textContent = 'Data: ' + formatTime(current.timestamp);
+  document.getElementById('lastUpdated').textContent = 'Data: ' + fmtUTC(current.timestamp, true);
+
+  const stale = document.getElementById('staleBanner');
+  const ageS = data.data_age_s ?? Math.round((Date.now() - new Date(current.timestamp)) / 1000);
+  if (ageS > STALE_AFTER_S) {
+    stale.textContent = `Stale data: last sample is ${Math.round(ageS / 60)} min old. The logger may be stalled; signals below may not reflect the present.`;
+    stale.style.display = 'block';
+  } else {
+    stale.style.display = 'none';
+  }
 
   let html = '';
-
-  // Region cards
   html += '<div class="section-title">Monitored Regions</div>';
-  html += '<div class="region-grid">' + renderRegionCards(current) + '</div>';
+  html += '<div class="region-grid">' + renderRegionCards(current, baselines) + '</div>';
 
-  // Timeline
   html += '<div class="section-title">24-Hour Timeline</div>';
   html += renderTimeline(timeline);
 
-  // BGP Detail
   html += '<div class="section-title">BGP Routing Detail</div>';
-  html += renderBgpTable(current);
+  html += `<div class="section-sub">Degraded below ${BGP_WARN_BELOW * 100}% peer visibility or a ${Math.round((1 - PREFIX_WARN_RATIO) * 100)}% prefix withdrawal vs the 24h median; Down below ${BGP_DOWN_BELOW * 100}% / ${Math.round((1 - PREFIX_DOWN_RATIO) * 100)}%.</div>`;
+  html += renderBgpTable(current, baselines);
 
-  // Flights
   html += '<div class="section-title">Airspace Activity</div>';
+  html += '<div class="section-sub">ADS-B positions via adsb.lol. GPS degraded = navigation integrity category ≤ 6, a signature of GNSS jamming or spoofing.</div>';
   html += renderFlights(current);
 
-  // Footer
   html += `<footer>
-    Data from AWS Lambda, Azure Functions, <a href="https://stat.ripe.net">RIPEstat</a>,
-    <a href="https://atlas.ripe.net">RIPE Atlas</a>, <a href="https://opensky-network.org">OpenSky Network</a>
-    &mdash; Refreshes every 60 seconds &mdash; ${data.entries_count || 0} entries in window
+    Sources: AWS Lambda heartbeats · <a href="https://stat.ripe.net">RIPEstat</a> ·
+    <a href="https://atlas.ripe.net">RIPE Atlas</a> · <a href="https://adsb.lol">adsb.lol</a><br>
+    Sampled every 5 minutes · page refreshes every 60 seconds · ${data.entries_count || 0} samples in window
+    ${current.collect_seconds != null ? `· last collection ${current.collect_seconds}s` : ''}
   </footer>`;
 
   document.getElementById('content').innerHTML = html;
 }
 
 async function fetchData() {
+  const banner = document.getElementById('errorBanner');
   try {
     const resp = await fetch(API_URL);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     lastData = data;
-    document.getElementById('errorBanner').style.display = 'none';
+    banner.style.display = 'none';
     render(data);
   } catch (err) {
     console.error('Fetch error:', err);
-    const banner = document.getElementById('errorBanner');
-    banner.textContent = `API Error: ${err.message}. ${lastData ? 'Showing last known data.' : ''}`;
+    banner.textContent = `API error: ${err.message}. ${lastData ? 'Showing last known data.' : ''}`;
     banner.style.display = 'block';
     if (lastData) render(lastData);
   }
 }
 
-// Initial load
 fetchData();
-// Auto-refresh every 60s
 setInterval(fetchData, 60000);
 </script>
 </body>

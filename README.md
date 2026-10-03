@@ -1,17 +1,22 @@
-# Region Heartbeat Monitor
+# Sentinel — Region Heartbeat Monitor
 
-Multi-cloud ground-truth health checks for conflict zones, independent of news reports, AWS Health Dashboard, or Azure Service Health.
+Multi-signal ground-truth health checks for conflict-zone infrastructure, independent of news reports and of the cloud providers' own status pages.
+
+**Live dashboard:** [https://sonde.briansheppard.com](https://sonde.briansheppard.com)
 
 ## What This Is
 
-A geopolitical early-warning system using multiple independent signal sources:
+A geopolitical early-warning system that samples several independent signal sources every 5 minutes and shows them side by side:
+
 - **AWS Lambda heartbeats** in 3 conflict-zone regions behind API Gateways
-- **Azure Function heartbeats** in 3 matching regions for multi-cloud redundancy
-- **BGP routing visibility** for 9 major ISP ASNs across 5 countries
+- **TCP canary** for Bahrain (me-south-1), where no Lambda can run since the March 2026 strikes
+- **BGP routing visibility** and announced-prefix counts for 9 major ISP ASNs across 5 countries (RIPEstat)
 - **RIPE Atlas probe counts** (connected vs disconnected) in 5 countries
-- **OpenSky flight density** across 4 bounding boxes (anonymous, rate-limited)
-- **Route 53 health checks** with CloudWatch alarms and SNS email alerts
-- **S3 JSONL logging** every 5 minutes with all signal data
+- **ADS-B airspace activity** in 4 zones via adsb.lol: aircraft, military aircraft, and GPS-degraded positions (a GNSS jamming signature)
+- **Route 53 health checks** with CloudWatch alarms and SNS email alerts on the AWS endpoints
+- **S3 JSONL log** of every sample, read by the dashboard API
+
+Azure Function heartbeats were part of the original design. The Azure subscription is closed, so Azure is no longer collected or displayed. The function source stays in `azure/` and `azure-node/` for a future redeploy.
 
 ## Signal Sources
 
@@ -23,13 +28,9 @@ A geopolitical early-warning system using multiple independent signal sources:
 | Israel (il-central-1) | https://c3icm0os4i.execute-api.il-central-1.amazonaws.com/ |
 | Hong Kong (ap-east-1) | https://jhxmflrny5.execute-api.ap-east-1.amazonaws.com/ |
 
-### Azure Heartbeats (3 regions)
+### Bahrain Canary
 
-| Region | Endpoint |
-|---|---|
-| UAE North | https://sentinel-heartbeat-uae.azurewebsites.net/api/heartbeat |
-| Israel Central | https://sentinel-heartbeat-israel.azurewebsites.net/api/heartbeat |
-| East Asia (HK) | https://sentinel-heartbeat-hk.azurewebsites.net/api/heartbeat |
+The logger opens a TCP connection to `s3.me-south-1.amazonaws.com:443` every run. The region has been unreachable since the March 1-2, 2026 drone strikes. The dashboard card flips from "CANARY — OFFLINE" to "CANARY — REACHABLE" automatically when the region returns.
 
 ### BGP Monitoring (9 ASNs, 5 countries)
 
@@ -45,185 +46,92 @@ A geopolitical early-warning system using multiple independent signal sources:
 | Taiwan | AS3462 | HiNet/Chunghwa Telecom |
 | Taiwan | AS9924 | Taiwan Fixed Network |
 
-Uses RIPEstat routing-status API. Tracks IPv4 visibility, peer counts, and announced prefix counts.
+Uses the RIPEstat `routing-status` call. Tracks IPv4 and IPv6 RIS peer visibility, announced prefix counts, and observed neighbours. The dashboard derives status from visibility (Degraded under 90%, Down under 50%) and from the prefix count against the 24-hour median (Degraded on a 20% withdrawal, Down on 50%). A failed RIPEstat lookup is shown as "No data" in purple, never as an outage.
 
 ### RIPE Atlas Probes (5 countries)
 
-BH, AE, IL, HK, TW — connected/disconnected counts via Atlas API.
+BH, AE, IL, HK, TW. Connected and disconnected probe counts via the Atlas API.
 
-### OpenSky Flight Density (4 zones)
+### ADS-B Airspace Activity (4 zones)
 
-| Zone | Bounding Box (lat/lon) |
-|---|---|
-| Israel | 29-33.5°N, 34-36°E |
-| Persian Gulf | 23-27°N, 49-57°E |
-| Taiwan Strait | 22-27°N, 117-122°E |
-| Hong Kong | 21.5-23°N, 113-115°E |
+| Zone | Centre (lat, lon) | Radius |
+|---|---|---|
+| Israel | 31.25, 35.0 | 150 nm |
+| Persian Gulf | 25.0, 53.0 | 250 nm |
+| Taiwan Strait | 24.5, 119.5 | 250 nm |
+| Hong Kong | 22.25, 114.0 | 60 nm |
 
-Anonymous access, rate-limited to every 20 minutes. Degrades gracefully on timeout.
+Point queries against `api.adsb.lol/v2/point`. No account needed. Requests are spaced 1.5 s apart because the API returns HTTP 429 for bursts. Per zone the logger records total aircraft, aircraft flagged military in the adsb.lol database, and the count of positions whose Navigation Integrity Category is 6 or lower, which for airliners in cruise almost always indicates GNSS interference.
 
 ## Deployed Infrastructure
 
 ### AWS Resources
 
-#### UAE (me-central-1)
-
-| Resource | ID / ARN |
-|---|---|
-| Lambda | `region-heartbeat` |
-| API Gateway | `m6rjrc7hrc` |
-| Health Check | `c3f9f441-5a37-462a-b6d2-0c31441539db` |
-| Alarm | `ME-Central-1-UAE-Unhealthy` |
-
-#### Israel (il-central-1)
-
-| Resource | ID / ARN |
-|---|---|
-| Lambda | `region-heartbeat` |
-| API Gateway | `c3icm0os4i` |
-| Health Check | `8fe97cb9-0007-4e90-839d-cdeb4331715d` |
-| Alarm | `IL-Central-1-TelAviv-Unhealthy` |
-
-#### Bahrain Canary (me-south-1)
-
-| Resource | ID / ARN |
-|---|---|
-| Health Check | `49fdfad8-98b3-4f6f-b165-bf23a803421e` |
-| Alarm | `ME-South-1-Bahrain-Unhealthy` |
-
-*No Lambda deployed — region destroyed by drone strikes (Mar 1-2, 2026). TCP health check against s3.me-south-1 serves as a recovery canary.*
-
-#### Hong Kong (ap-east-1)
-
-| Resource | ID / ARN |
-|---|---|
-| Lambda | `region-heartbeat` |
-| API Gateway | `jhxmflrny5` |
-| Health Check | `fb07f4da-cef8-41a7-91b5-afd9965dd1a8` |
-| Alarm | `AP-East-1-HongKong-Unhealthy` |
-
-#### Centralized Logger (us-east-1)
-
-| Resource | ID / ARN |
-|---|---|
-| Lambda | `heartbeat-logger` (256MB, 120s timeout) |
-| EventBridge Rule | `heartbeat-logger-schedule` (every 5 min) |
-| S3 Logs | `s3://atlas-sentinel-data/heartbeat-logs/YYYY/MM/DD/heartbeats.jsonl` |
-| IAM Policy | `heartbeat-s3-logging` (inline on heartbeat-lambda-role) |
-
-#### Shared AWS Resources
-
-| Resource | ID / ARN |
-|---|---|
-| SNS Topic | `arn:aws:sns:us-east-1:290318879194:region-health-alerts` |
-| IAM Role | `heartbeat-lambda-role` |
-| S3 Bucket | `atlas-sentinel-data` |
-
-**AWS Account:** 290318879194
-
-### Azure Resources
-
-| Resource | Region | Type |
+| Region | Resource | ID |
 |---|---|---|
-| Resource Group | UAE North | `heartbeat-monitors` |
-| Function App | UAE North | `sentinel-heartbeat-uae` (Python 3.11, Linux Consumption) |
-| Function App | Israel Central | `sentinel-heartbeat-israel` (Node.js 20, Windows Consumption) |
-| Function App | East Asia | `sentinel-heartbeat-hk` (Python 3.11, Linux Consumption) |
-| Storage Account | UAE North | `sentinelhbuae` |
-| Storage Account | Israel Central | `sentinelhbisrael` |
-| Storage Account | East Asia | `sentinelhbhk` |
+| me-central-1 | Lambda `region-heartbeat`, API Gateway `m6rjrc7hrc` | Health check `c3f9f441-5a37-462a-b6d2-0c31441539db`, alarm `ME-Central-1-UAE-Unhealthy` |
+| il-central-1 | Lambda `region-heartbeat`, API Gateway `c3icm0os4i` | Health check `8fe97cb9-0007-4e90-839d-cdeb4331715d`, alarm `IL-Central-1-TelAviv-Unhealthy` |
+| ap-east-1 | Lambda `region-heartbeat`, API Gateway `jhxmflrny5` | Health check `fb07f4da-cef8-41a7-91b5-afd9965dd1a8`, alarm `AP-East-1-HongKong-Unhealthy` |
+| me-south-1 | No resources. The former Route 53 TCP health check has been deleted; the logger's TCP canary replaces it. | |
+| us-east-1 | Lambda `heartbeat-logger` (Python 3.12, 256 MB, 120 s) | EventBridge rule `heartbeat-logger-schedule`, every 5 min |
+| us-east-1 | Lambda `sentinel-dashboard-api` (Python 3.12, 256 MB, 15 s) | API Gateway HTTP API `dy5td5v3n7`, `GET /api/status` |
+| us-east-1 | S3 `atlas-sentinel-data` | Logs at `heartbeat-logs/YYYY/MM/DD/heartbeats.jsonl`, about 1.3 MB/day |
+| us-east-1 | S3 `sonde.briansheppard.com` | Dashboard `index.html` |
+| us-east-1 | CloudFront `EBKQ3P9SKPPG2` (`d3isdvutafytq9.cloudfront.net`) | ACM cert `c6836739-2510-42bd-a3f3-cb84b643231b`, OAC `E2RT19QB6TGAD2` |
+| us-east-1 | SNS `arn:aws:sns:us-east-1:290318879194:region-health-alerts` | Email alerts |
+| global | IAM role `heartbeat-lambda-role` | Inline policy `heartbeat-s3-logging`; also needs `AWSLambdaBasicExecutionRole` for CloudWatch Logs |
 
-*Israel Central doesn't support Python on Linux Consumption — uses Node.js on Windows instead.*
-
-**Azure Subscription:** 9a4c89d6-db49-40a3-b8d1-d7153d1fa6c2
+DNS: Porkbun CNAME `sonde` → `d3isdvutafytq9.cloudfront.net`. AWS account `290318879194`.
 
 ## How It Works
 
-1. **Real-time alerting**: Route 53 health checkers hit each AWS API Gateway endpoint every 30 seconds from multiple global locations. If 3 consecutive checks fail → CloudWatch alarm → SNS → email to bshepp@gmail.com.
-2. **Bahrain canary**: TCP health check against `s3.me-south-1.amazonaws.com:443` — currently failing due to drone strike damage (Mar 1-2, 2026). Will alarm-clear when the region recovers.
-3. **5-minute logging**: `heartbeat-logger` Lambda polls all signal sources in order (fast → slow): AWS heartbeats → RIPE probes → Azure heartbeats → OpenSky flights (if 20-min gate) → BGP routing (slowest). Appends JSONL to S3.
-4. **Log format**: Each JSONL line contains: `timestamp`, `heartbeats`, `probes`, `azure_heartbeats`, `flights` (when sampled), `bgp`.
+1. **Real-time alerting.** Route 53 health checkers hit each AWS API Gateway endpoint every 30 seconds from multiple locations. Three consecutive failures raise a CloudWatch alarm, which publishes to SNS and emails bshepp@gmail.com.
+2. **5-minute logging.** `heartbeat-logger` runs all checks concurrently in a thread pool (about 10 to 15 s wall time) and appends one JSON line to the day's file in S3.
+3. **Dashboard API.** `sentinel-dashboard-api` reads today's and yesterday's files, returns the latest full sample as `current`, a slimmed 24-hour `timeline`, and a per-ASN `bgp_baseline` (24-hour medians). If the latest flight sample failed it carries forward the last successful one and sets `flights_as_of`.
+4. **Dashboard.** Static page on S3 behind CloudFront. Fetches the API every 60 seconds. Shows a stale-data banner when the latest sample is more than 15 minutes old.
 
-## Deploying Updates
+### Log Line Format
 
-### AWS Heartbeat Lambda
-```powershell
-$tmp = "$env:TEMP\hb_deploy"; New-Item $tmp -ItemType Directory -Force | Out-Null
-Copy-Item heartbeat\lambda\heartbeat.py "$tmp\heartbeat.py"
-Compress-Archive -Path "$tmp\heartbeat.py" -DestinationPath "$tmp\heartbeat.zip" -Force
-aws lambda update-function-code --function-name region-heartbeat --region <REGION> --zip-file "fileb://$tmp/heartbeat.zip"
-```
+Each JSONL line has `timestamp`, `collect_seconds`, and five sections, each with `results` and `summary`:
 
-### AWS Logger Lambda
-```powershell
-$tmp = "$env:TEMP\logger_deploy"; New-Item $tmp -ItemType Directory -Force | Out-Null
-Copy-Item heartbeat\lambda\heartbeat_logger.py "$tmp\heartbeat_logger.py"
-Compress-Archive -Path "$tmp\heartbeat_logger.py" -DestinationPath "$tmp\logger.zip" -Force
-aws lambda update-function-code --function-name heartbeat-logger --region us-east-1 --zip-file "fileb://$tmp/logger.zip"
-```
-
-### Azure Functions (Python — UAE, HK)
-```powershell
-cd heartbeat\azure
-func azure functionapp publish sentinel-heartbeat-uae --python
-func azure functionapp publish sentinel-heartbeat-hk --python
-```
-
-### Azure Function (Node.js — Israel)
-```powershell
-cd heartbeat\azure-node
-npm install
-func azure functionapp publish sentinel-heartbeat-israel --javascript
-```
-
-## Dashboard
-
-**Live:** [https://sonde.briansheppard.com](https://sonde.briansheppard.com)
-
-Single-page dashboard showing all signals in real-time. Auto-refreshes every 60 seconds.
-
-### Dashboard Architecture
-
-```
-Browser (sonde.briansheppard.com)
-    |  HTTPS
-CloudFront (CDN + SSL) — distribution EBKQ3P9SKPPG2
-    |
-S3 bucket (sonde.briansheppard.com/index.html)
-    |  fetch() every 60s
-API Gateway HTTP API (dy5td5v3n7, us-east-1)
-    |
-Lambda: sentinel-dashboard-api
-    |  reads
-S3: atlas-sentinel-data/heartbeat-logs/YYYY/MM/DD/heartbeats.jsonl
-```
-
-DNS: Porkbun CNAME `sonde` → `d3isdvutafytq9.cloudfront.net`
-
-### Dashboard Resources
-
-| Resource | ID / Details |
+| Section | Per-result fields |
 |---|---|
-| Lambda | `sentinel-dashboard-api` (Python 3.12, 256MB, 15s) |
-| API Gateway | `dy5td5v3n7` — `GET /api/status` |
-| S3 Bucket | `sonde.briansheppard.com` |
-| CloudFront | `EBKQ3P9SKPPG2` / `d3isdvutafytq9.cloudfront.net` |
-| ACM Cert | `c6836739-2510-42bd-a3f3-cb84b643231b` |
-| OAC | `E2RT19QB6TGAD2` |
+| `heartbeats` | `region`, `reachable`, `status_code`, `latency_ms`, `body` |
+| `probes` | `country`, `connected`, `disconnected`, `status` |
+| `bgp` | `country`, `asn`, `name`, `status`, `v4_visibility`, `v4_peers_seeing`, `v4_total_peers`, `v6_visibility`, `announced_prefixes`, `announced_prefixes_v6`, `observed_neighbours` |
+| `flights` | `zone`, `status`, `aircraft_count`, `military_count`, `gps_sampled`, `gps_degraded_count` |
+| `canaries` | `region`, `label`, `host`, `port`, `reachable`, `latency_ms` |
 
-### Updating the Dashboard
+Entries written before October 2026 have an `azure_heartbeats` section, lack `canaries`, and only carry `flights` every 20 minutes. The API and dashboard tolerate both shapes.
+
+## Development
 
 ```powershell
-# Update frontend
-aws s3 cp heartbeat\dashboard\index.html s3://sonde.briansheppard.com/index.html --content-type "text/html; charset=utf-8"
-aws cloudfront create-invalidation --distribution-id EBKQ3P9SKPPG2 --paths "/*"
-
-# Update API Lambda
-cd heartbeat\dashboard\api
-python -c "import zipfile; z=zipfile.ZipFile('dashboard_api.zip','w'); z.write('dashboard_api.py'); z.close()"
-aws lambda update-function-code --function-name sentinel-dashboard-api --zip-file fileb://dashboard_api.zip --region us-east-1
+python -m pytest tests -q          # unit tests for the pure logic in both Lambdas
 ```
+
+To exercise the collector locally without writing to S3:
+
+```powershell
+python -c "import sys; sys.path.insert(0,'lambda'); import heartbeat_logger as hl, json; print(json.dumps({k: v['summary'] for k, v in hl.collect().items()}))"
+```
+
+## Deploying
+
+`deploy.ps1` zips and uploads each component. It needs the AWS CLI configured for account 290318879194.
+
+```powershell
+.\deploy.ps1 logger                    # heartbeat-logger
+.\deploy.ps1 api                       # sentinel-dashboard-api
+.\deploy.ps1 dashboard                 # index.html to S3 + CloudFront invalidation
+.\deploy.ps1 heartbeat -Region ap-east-1   # one regional heartbeat Lambda
+.\deploy.ps1 all                       # logger + api + dashboard
+```
+
+### Azure (decommissioned)
+
+Kept for reference. `azure/` is the Python function (UAE North, East Asia); `azure-node/` is the Node.js function used for Israel Central, which did not support Python on Linux Consumption. Redeploy with `func azure functionapp publish <app>` and add the endpoints back to the logger if the subscription is reopened.
 
 ## Context
 
-Both ME regions were physically attacked by drone strikes on March 1-2, 2026. AWS recommends migrating workloads out of the Middle East. Israel (il-central-1, Tel Aviv) monitors the broader Middle East conflict zone. Hong Kong (ap-east-1) serves as an early-warning canary for Taiwan Strait escalation. This system provides independent, multi-cloud, multi-signal ground-truth verification of regional stability.
+Both Middle East AWS regions were physically attacked by drone strikes on March 1-2, 2026, and me-south-1 has been offline since. Israel (il-central-1) monitors the broader Middle East conflict zone. Hong Kong (ap-east-1) and the Taiwan BGP and probe signals serve as early warning for Taiwan Strait escalation. This system provides independent, multi-signal ground-truth verification of regional stability.
